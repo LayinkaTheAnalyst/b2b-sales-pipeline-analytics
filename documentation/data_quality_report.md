@@ -1,65 +1,67 @@
 # Data Quality Report
 
-## Project Overview
+## Why I reviewed the data
 
-This report summarizes the data-quality assessment completed for the MavenTech B2B Sales Pipeline Analytics project. The review covered the four source tables—accounts, products, sales teams and sales opportunities—before any cleaning or business analysis was performed.
+Before analysing sales performance or building a dashboard, I wanted to make sure the underlying data could be trusted. A polished dashboard is not very useful if records are missing, labels do not match or dates do not make sense.
 
-The assessment focused on completeness, uniqueness, validity, consistency and relational integrity. All results were produced using the diagnostic queries in [`sql/03_data_quality.sql`](../sql/03_data_quality.sql).
+I reviewed the accounts, products, sales teams and sales pipeline tables for missing information, duplicate records, inconsistent labels and broken relationships. The checks are documented in [`sql/03_data_quality.sql`](../sql/03_data_quality.sql).
 
-## Executive Summary
+## What I found at a glance
 
-The dataset is generally well structured and suitable for analysis. All four source files were fully loaded, primary identifiers are unique, closed opportunities contain the required dates and values, and no invalid stage or date combinations were found.
+The good news is that the dataset is in strong shape overall. All four source files were loaded completely, every primary identifier is unique, and the dates and values follow the expected sales process.
 
-Three label inconsistencies require standardization:
+I found only three labels that need to be tidied up:
 
-- `GTXPro` should match the catalogue label `GTX Pro` in 1,480 pipeline records.
+- `GTXPro` should be written as `GTX Pro` in 1,480 sales opportunities.
 - `technolgy` should be corrected to `technology` in 12 account records.
 - `Philipines` should be corrected to `Philippines` in one account record.
 
-The missing fields in open opportunities are expected rather than erroneous. They reflect information that is not yet available because the opportunities have not progressed or closed. These records will be retained.
+I also found blank fields among open opportunities. These are not mistakes. They represent information that would not exist yet—for example, an opportunity that is still open cannot have a final closing date or selling price. I will keep those records and preserve the blanks as `NULL` values.
 
-## 1. Source Reconciliation
+## Did every record make it into the database?
 
-The database counts matched the source files after the staged pipeline import.
+Yes. After resolving the pipeline import issue described in the project log, the database counts matched the original files exactly.
 
 | Table | Expected records | Loaded records | Result |
 |---|---:|---:|---|
-| `raw_accounts` | 85 | 85 | Pass |
-| `raw_products` | 7 | 7 | Pass |
-| `raw_sales_teams` | 35 | 35 | Pass |
-| `raw_sales_pipeline` | 8,800 | 8,800 | Pass |
+| `raw_accounts` | 85 | 85 | Complete |
+| `raw_products` | 7 | 7 | Complete |
+| `raw_sales_teams` | 35 | 35 | Complete |
+| `raw_sales_pipeline` | 8,800 | 8,800 | Complete |
 
-This confirmed that the staging-table solution preserved all 2,089 open opportunities that had been omitted during the initial direct import.
+This confirmed that the revised import preserved all 2,089 open opportunities that were missing from the initial direct import.
 
-## 2. Duplicate Identifiers
+## Did I find any duplicates?
 
-No duplicate primary identifiers were found.
+No duplicate identifiers appeared in any of the four tables.
 
-| Identifier checked | Duplicate records | Result |
-|---|---:|---|
-| Opportunity ID | 0 | Pass |
-| Account name | 0 | Pass |
-| Product name | 0 | Pass |
-| Sales-agent name | 0 | Pass |
+| Identifier checked | Duplicates found |
+|---|---:|
+| Opportunity ID | 0 |
+| Account name | 0 |
+| Product name | 0 |
+| Sales-agent name | 0 |
 
-No deduplication is required.
+Each opportunity, account, product and sales agent can therefore be identified clearly. No records need to be removed as duplicates.
 
-## 3. Missing Values
+## What was missing—and did it make sense?
 
-### Sales pipeline
+### Sales opportunities
 
-| Field | Missing records | Share of pipeline | Assessment |
-|---|---:|---:|---|
-| Opportunity ID | 0 | 0.0% | Complete |
-| Sales agent | 0 | 0.0% | Complete |
-| Product | 0 | 0.0% | Complete |
-| Account | 1,425 | 16.2% | Expected for some open opportunities |
-| Deal stage | 0 | 0.0% | Complete |
-| Engagement date | 500 | 5.7% | Expected for Prospecting opportunities |
-| Close date | 2,089 | 23.7% | Expected for open opportunities |
-| Close value | 2,089 | 23.7% | Expected for open opportunities |
+At first glance, the pipeline has several blank fields:
 
-Breaking the missing values down by stage showed a consistent business pattern:
+| Field | Missing records | Share of pipeline |
+|---|---:|---:|
+| Opportunity ID | 0 | 0.0% |
+| Sales agent | 0 | 0.0% |
+| Product | 0 | 0.0% |
+| Account | 1,425 | 16.2% |
+| Deal stage | 0 | 0.0% |
+| Engagement date | 500 | 5.7% |
+| Close date | 2,089 | 23.7% |
+| Close value | 2,089 | 23.7% |
+
+The important question was not simply, “Are values missing?” It was, “Are they missing where we would reasonably expect them to be?” Breaking the results down by deal stage answered that question.
 
 | Deal stage | Records | Missing account | Missing engagement date | Missing close date | Missing close value |
 |---|---:|---:|---:|---:|---:|
@@ -68,52 +70,48 @@ Breaking the missing values down by stage showed a consistent business pattern:
 | Prospecting | 500 | 337 | 500 | 500 | 500 |
 | Won | 4,238 | 0 | 0 | 0 | 0 |
 
-All closed opportunities have an account, engagement date, close date and close value. The missing account names occur only in the open pipeline and most likely represent prospects that have not yet been linked to a formal account record.
+Every completed opportunity has an account, engagement date, closing date and closing value. The blank closing information belongs entirely to open opportunities, which is exactly where it should appear.
 
-These blanks will be preserved as `NULL`. For reporting, unnamed accounts may be displayed as **Unassigned / Not yet identified**, but they will not be converted into a real account member in the data model.
+The 500 Prospecting opportunities do not have engagement dates because customer engagement has not started yet. Some open opportunities also have no account name, most likely because the prospect has not yet been connected to a formal customer account.
 
-### Accounts
+I will keep these blanks as `NULL`. In the dashboard, I may display unnamed accounts as **Unassigned / Not yet identified** so the meaning is clear, but I will not turn that label into a real account in the data model.
 
-Seventy of the 85 accounts have no parent company listed. This is reasonable because `subsidiary_of` applies only when an account is a subsidiary. The blanks will remain `NULL`.
+### Parent companies
 
-## 4. Business-Rule Validation
+Seventy of the 85 accounts do not have a parent company listed. That is reasonable because `subsidiary_of` applies only when a business is actually a subsidiary. These blanks will also remain `NULL`.
 
-The opportunity records passed every stage, date and value rule tested.
+## Does the sales process make sense?
 
-| Validation rule | Exceptions | Result |
-|---|---:|---|
-| Closed opportunities missing required dates or values | 0 | Pass |
-| Open opportunities containing closure information | 0 | Pass |
-| Engaging opportunities missing an engagement date | 0 | Pass |
-| Prospecting opportunities containing an engagement date | 0 | Pass |
-| Close date earlier than engagement date | 0 | Pass |
-| Won deals with non-positive values | 0 | Pass |
-| Lost deals with non-zero values | 0 | Pass |
-| Unrecognized deal stages | 0 | Pass |
+I checked the records against a few basic rules we would expect the sales process to follow. Every test passed.
 
-The four valid stages are Prospecting, Engaging, Won and Lost.
+| Question checked | Problems found |
+|---|---:|
+| Completed opportunities missing dates or values | 0 |
+| Open opportunities already containing closing information | 0 |
+| Engaging opportunities missing an engagement date | 0 |
+| Prospecting opportunities already containing an engagement date | 0 |
+| Opportunities closing before engagement | 0 |
+| Won deals with a zero or negative value | 0 |
+| Lost deals incorrectly showing revenue | 0 |
+| Unfamiliar deal stages | 0 |
 
-## 5. Relational Integrity
+The four stages—Prospecting, Engaging, Won and Lost—are used consistently. The dates and values also follow a logical progression from initial prospecting to a completed outcome.
 
-### Confirmed product mismatch
+## Do the tables connect properly?
 
-The pipeline contains 1,480 opportunities recorded as `GTXPro`, while the product catalogue contains `GTX Pro`. The catalogue version has no exact-match pipeline activity, strongly confirming that these labels refer to the same product.
+For the most part, yes. Every sales agent named in the pipeline appears in the sales-team roster, every named pipeline account appears in the accounts table, and every listed parent company can be matched to an account.
 
-This mismatch would prevent those opportunities from joining to the product table and would understate product-level revenue, conversions and activity if left unresolved.
+### One product name does not match
 
-**Treatment:** Standardize `GTXPro` to `GTX Pro` in the cleaned analytical layer. Preserve the original value in the raw table.
+The main relationship problem involves `GTXPro`. That label appears in 1,480 pipeline records, but the product catalogue uses `GTX Pro`, with a space. At the same time, the catalogue version appears to have no sales activity when the tables are matched exactly.
 
-### Other relationship checks
+This strongly suggests that both labels refer to the same product. If I leave the mismatch unresolved, those 1,480 opportunities will disappear from product-level comparisons and their revenue will not be assigned to the correct product.
 
-| Check | Finding | Assessment |
-|---|---|---|
-| Pipeline agents absent from roster | None | Pass |
-| Named pipeline accounts absent from account table | None | Pass |
-| Parent companies absent from account table | None | Pass |
-| Catalogue products with no exact-match activity | `GTX Pro` | Explained by `GTXPro` mismatch |
-| Accounts with no opportunities | None | Pass |
+I will standardize `GTXPro` to `GTX Pro` in the cleaned data. The original raw value will remain untouched so the change is fully traceable.
 
-Five rostered sales agents have no recorded opportunities:
+### Five agents have no opportunities
+
+The sales-team roster includes five agents who do not appear in the pipeline:
 
 - Mei-Mei Johns — Central
 - Elizabeth Anderson — East
@@ -121,47 +119,40 @@ Five rostered sales agents have no recorded opportunities:
 - Carol Thompson — West
 - Carl Lin — West
 
-This is not automatically a data defect. The roster may include inactive, newly hired or out-of-period employees. The agents will remain in the sales-team dimension so the model preserves the complete organizational structure. Any performance ranking should distinguish between zero activity and missing personnel data.
+This does not necessarily mean the roster is wrong. They may be new employees, inactive staff or simply outside the period covered by the opportunity data. I will keep them in the sales-team table so the full team structure is preserved. When comparing performance, I will make it clear that they have zero recorded activity rather than missing personnel information.
 
-## 6. Category Consistency
+## Are the category labels consistent?
 
-Two spelling inconsistencies were identified in the accounts table:
+I found two straightforward spelling errors in the accounts table:
 
-| Field | Source value | Standardized value | Affected records |
+| Field | Original value | Corrected value | Records affected |
 |---|---|---|---:|
 | Sector | `technolgy` | `technology` | 12 |
 | Office location | `Philipines` | `Philippines` | 1 |
 
-**Treatment:** Correct both values in the cleaned analytical layer while preserving the raw source table unchanged.
+Both will be corrected in the cleaned data. The source tables will stay exactly as they were imported. The sales-team regions are already consistent: Central, East and West.
 
-No unexpected values were found in the regional-office field; the valid categories are Central, East and West.
+## Do the numbers look reasonable?
 
-## 7. Range and Plausibility Review
+The numerical ranges are broad, but none immediately suggests an impossible or corrupted value.
 
-### Accounts and products
-
-| Measure | Minimum | Maximum | Assessment |
+| Measure | Minimum | Maximum | My assessment |
 |---|---:|---:|---|
-| Year established | 1979 | 2017 | Plausible |
-| Account revenue (millions) | 4.54 | 11,698.03 | Wide but plausible |
-| Employees | 9 | 34,288 | Wide but plausible |
-| Suggested product price | 55 | 26,768 | Plausible across product tiers |
+| Year established | 1979 | 2017 | Reasonable |
+| Account revenue (millions) | 4.54 | 11,698.03 | Wide, but possible across different company sizes |
+| Employees | 9 | 34,288 | Wide, but possible across different company sizes |
+| Suggested product price | 55 | 26,768 | Reasonable across different product tiers |
+| Won deal value | 38 | 30,288 | Reasonable given the product-price range |
 
-### Opportunities
+Engagement dates run from October 20, 2016, to December 27, 2017. Closing dates run from March 1 to December 31, 2017.
 
-| Measure | Minimum | Maximum | Assessment |
-|---|---:|---:|---|
-| Engagement date | 2016-10-20 | 2017-12-27 | Valid |
-| Close date | 2017-03-01 | 2017-12-31 | Valid |
-| Won deal value | 38 | 30,288 | Plausible |
+Completed sales cycles range from 1 to 138 days. Won opportunities take an average of 51.8 days, compared with 41.5 days for lost opportunities. There are no negative sales cycles. The shortest and longest cycles may be worth exploring later, but there is no evidence that they should be deleted as errors.
 
-Completed sales cycles range from 1 to 138 days. Won deals average 51.8 days, while lost deals average 41.5 days. No negative durations were found. The short and long cycles may be analytically interesting, but they are within the observed business range and will not be removed as outliers.
+## How closely do selling prices match suggested prices?
 
-## 8. Price Consistency
+For the six products that matched the catalogue before cleaning, average selling prices stayed remarkably close to their suggested prices.
 
-For the six products that matched the catalogue before cleaning, average realized prices were close to their suggested prices.
-
-| Product | Suggested price | Won deals | Average close value | Average realization |
+| Product | Suggested price | Won deals | Average selling price | Average price realization |
 |---|---:|---:|---:|---:|
 | GTK 500 | 26,768 | 15 | 26,707.47 | 99.8% |
 | GTX Basic | 550 | 915 | 545.64 | 99.2% |
@@ -170,25 +161,27 @@ For the six products that matched the catalogue before cleaning, average realize
 | MG Advanced | 3,393 | 654 | 3,388.97 | 99.9% |
 | MG Special | 55 | 793 | 55.19 | 100.3% |
 
-The variation around suggested prices is consistent with discounts or negotiated premiums. These values will be retained rather than forced to catalogue prices. `GTX Pro` will be added to this comparison after its pipeline label is standardized.
+Small differences are normal and could reflect discounts or negotiated premiums. I will keep the actual selling prices rather than replacing them with catalogue prices. `GTX Pro` will join this comparison once its name has been standardized.
 
-## 9. Cleaning Decisions
+## What I will change—and what I will leave alone
 
-| Finding | Classification | Decision |
+| Finding | What it means | Decision |
 |---|---|---|
-| `GTXPro` product label | Confirmed consistency error | Standardize to `GTX Pro` |
-| `technolgy` sector label | Confirmed spelling error | Standardize to `technology` |
-| `Philipines` location label | Confirmed spelling error | Standardize to `Philippines` |
-| Missing close dates and values in open stages | Expected structural missingness | Retain as `NULL` |
-| Missing engagement dates in Prospecting | Expected structural missingness | Retain as `NULL` |
-| Missing accounts in open stages | Expected structural missingness | Retain as `NULL`; label only in presentation layer |
-| Missing parent company | Optional attribute | Retain as `NULL` |
-| Five agents with no opportunities | Valid but noteworthy observation | Retain in sales-team dimension |
-| Variance from suggested product prices | Valid business variation | Retain actual close values |
-| Sales-cycle range of 1–138 days | Valid but noteworthy observation | Retain all records |
+| `GTXPro` | Product name does not match the catalogue | Change to `GTX Pro` |
+| `technolgy` | Sector name is misspelled | Change to `technology` |
+| `Philipines` | Country name is misspelled | Change to `Philippines` |
+| Open opportunities have no closing details | The deals have not closed yet | Keep as `NULL` |
+| Prospecting opportunities have no engagement dates | Engagement has not started yet | Keep as `NULL` |
+| Some open opportunities have no account | The customer may not yet be formally identified | Keep as `NULL`; clarify only when displaying it |
+| Most accounts have no parent company | The field does not apply to every company | Keep as `NULL` |
+| Five agents have no opportunities | They have no recorded activity in this dataset | Keep them in the team table |
+| Selling prices differ slightly from suggested prices | Normal commercial variation | Keep the actual values |
+| Sales cycles range from 1 to 138 days | Valid variation worth exploring later | Keep every record |
 
-## Conclusion
+## Where this leaves the project
 
-The quality review found no duplicate keys, missing closed-deal information, invalid opportunity stages, impossible date sequences or broken agent/account relationships. The dataset can proceed to cleaning after three text values are standardized.
+The data is reliable enough to move forward. I found no duplicate IDs, missing information on completed deals, impossible date sequences, unfamiliar stages or broken agent and account relationships.
 
-The next step is to implement these decisions in `sql/04_data_cleaning.sql`, creating a clean analytical layer while keeping every raw table unchanged and fully traceable to the source files.
+The cleaning stage is therefore quite focused: I need to standardize three text labels while leaving valid business variation and structurally missing information alone.
+
+The next step is to apply these decisions in `sql/04_data_cleaning.sql`. That script will create a clean analytical layer without changing the raw source tables, so every adjustment remains transparent and reproducible.
