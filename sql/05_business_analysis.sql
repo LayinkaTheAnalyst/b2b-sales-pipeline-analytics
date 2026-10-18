@@ -527,6 +527,349 @@ GROUP BY
 ORDER BY month_start, a.regional_office;
 
 -- =============================================================
--- END OF PART 2
--- Next: product, pricing, account and customer-segment performance.
+-- PART 3: PRODUCT, PRICING AND CUSTOMER PERFORMANCE
+-- =============================================================
+
+-- -------------------------------------------------------------
+-- 15. PRODUCT PERFORMANCE
+-- -------------------------------------------------------------
+-- Question: Which products generate the most revenue, convert most
+-- successfully and carry the largest active pipelines?
+
+SELECT
+    pr.product,
+    pr.series,
+    pr.suggested_price,
+    COUNT(p.opportunity_id) AS total_opportunities,
+    SUM(p.deal_stage IN ('Won', 'Lost')) AS completed_opportunities,
+    SUM(p.deal_stage = 'Won') AS won_opportunities,
+    SUM(p.deal_stage = 'Lost') AS lost_opportunities,
+    SUM(p.deal_stage IN ('Prospecting', 'Engaging')) AS open_opportunities,
+    ROUND(
+        100.0 * SUM(p.deal_stage = 'Won')
+        / NULLIF(SUM(p.deal_stage IN ('Won', 'Lost')), 0),
+        1
+    ) AS win_rate_pct,
+    ROUND(
+        SUM(CASE WHEN p.deal_stage = 'Won' THEN p.close_value ELSE 0 END),
+        2
+    ) AS won_revenue,
+    ROUND(
+        AVG(CASE WHEN p.deal_stage = 'Won' THEN p.close_value END),
+        2
+    ) AS average_won_deal_value,
+    ROUND(
+        AVG(CASE
+            WHEN p.deal_stage IN ('Won', 'Lost') THEN p.sales_cycle_days
+        END),
+        1
+    ) AS average_completed_sales_cycle_days
+FROM dim_products AS pr
+LEFT JOIN fact_sales_pipeline AS p
+    ON pr.product = p.product
+GROUP BY
+    pr.product,
+    pr.series,
+    pr.suggested_price
+ORDER BY won_revenue DESC;
+
+-- -------------------------------------------------------------
+-- 16. PRODUCT-SERIES PERFORMANCE
+-- -------------------------------------------------------------
+-- Question: At the broader portfolio level, which product series
+-- contributes the most revenue and converts most effectively?
+
+SELECT
+    pr.series,
+    COUNT(p.opportunity_id) AS total_opportunities,
+    SUM(p.deal_stage IN ('Won', 'Lost')) AS completed_opportunities,
+    SUM(p.deal_stage = 'Won') AS won_opportunities,
+    SUM(p.deal_stage IN ('Prospecting', 'Engaging')) AS open_opportunities,
+    ROUND(
+        100.0 * SUM(p.deal_stage = 'Won')
+        / NULLIF(SUM(p.deal_stage IN ('Won', 'Lost')), 0),
+        1
+    ) AS win_rate_pct,
+    ROUND(
+        SUM(CASE WHEN p.deal_stage = 'Won' THEN p.close_value ELSE 0 END),
+        2
+    ) AS won_revenue,
+    ROUND(
+        AVG(CASE WHEN p.deal_stage = 'Won' THEN p.close_value END),
+        2
+    ) AS average_won_deal_value
+FROM dim_products AS pr
+LEFT JOIN fact_sales_pipeline AS p
+    ON pr.product = p.product
+GROUP BY pr.series
+ORDER BY won_revenue DESC;
+
+-- -------------------------------------------------------------
+-- 17. PRICE REALIZATION BY PRODUCT
+-- -------------------------------------------------------------
+-- Question: How closely do actual selling prices match suggested
+-- catalogue prices?
+--
+-- Price realization above 100% indicates an average premium, while
+-- a result below 100% indicates an average discount.
+
+SELECT
+    pr.product,
+    pr.series,
+    pr.suggested_price,
+    COUNT(*) AS won_deals,
+    ROUND(AVG(p.close_value), 2) AS average_selling_price,
+    ROUND(MIN(p.close_value), 2) AS minimum_selling_price,
+    ROUND(MAX(p.close_value), 2) AS maximum_selling_price,
+    ROUND(
+        100.0 * AVG(p.close_value) / NULLIF(pr.suggested_price, 0),
+        1
+    ) AS average_price_realization_pct,
+    ROUND(AVG(p.close_value) - pr.suggested_price, 2)
+        AS average_price_variance
+FROM fact_sales_pipeline AS p
+INNER JOIN dim_products AS pr
+    ON p.product = pr.product
+WHERE p.deal_stage = 'Won'
+GROUP BY
+    pr.product,
+    pr.series,
+    pr.suggested_price
+ORDER BY average_price_realization_pct DESC;
+
+-- -------------------------------------------------------------
+-- 18. MONTHLY PRODUCT REVENUE
+-- -------------------------------------------------------------
+-- Question: Which products drove revenue in each month, and did the
+-- product mix change through the year?
+
+SELECT
+    DATE_FORMAT(p.close_date, '%Y-%m-01') AS month_start,
+    p.product,
+    COUNT(*) AS won_deals,
+    ROUND(SUM(p.close_value), 2) AS won_revenue,
+    ROUND(AVG(p.close_value), 2) AS average_won_deal_value
+FROM fact_sales_pipeline AS p
+WHERE p.deal_stage = 'Won'
+GROUP BY
+    DATE_FORMAT(p.close_date, '%Y-%m-01'),
+    p.product
+ORDER BY month_start, won_revenue DESC;
+
+-- -------------------------------------------------------------
+-- 19. ACCOUNT PERFORMANCE
+-- -------------------------------------------------------------
+-- Question: Which customer accounts generate the most revenue and
+-- how consistently do their opportunities convert?
+
+SELECT
+    a.account,
+    a.sector,
+    a.office_location,
+    a.revenue_millions AS account_revenue_millions,
+    a.employees,
+    COUNT(p.opportunity_id) AS total_opportunities,
+    SUM(p.deal_stage = 'Won') AS won_opportunities,
+    SUM(p.deal_stage = 'Lost') AS lost_opportunities,
+    ROUND(
+        100.0 * SUM(p.deal_stage = 'Won')
+        / NULLIF(SUM(p.deal_stage IN ('Won', 'Lost')), 0),
+        1
+    ) AS win_rate_pct,
+    ROUND(
+        SUM(CASE WHEN p.deal_stage = 'Won' THEN p.close_value ELSE 0 END),
+        2
+    ) AS won_revenue,
+    ROUND(
+        AVG(CASE WHEN p.deal_stage = 'Won' THEN p.close_value END),
+        2
+    ) AS average_won_deal_value,
+    ROUND(
+        AVG(CASE
+            WHEN p.deal_stage IN ('Won', 'Lost') THEN p.sales_cycle_days
+        END),
+        1
+    ) AS average_completed_sales_cycle_days
+FROM dim_accounts AS a
+LEFT JOIN fact_sales_pipeline AS p
+    ON a.account = p.account
+GROUP BY
+    a.account,
+    a.sector,
+    a.office_location,
+    a.revenue_millions,
+    a.employees
+ORDER BY won_revenue DESC, a.account;
+
+-- -------------------------------------------------------------
+-- 20. SECTOR PERFORMANCE
+-- -------------------------------------------------------------
+-- Question: Which customer sectors produce the strongest commercial
+-- results?
+
+SELECT
+    a.sector,
+    COUNT(DISTINCT a.account) AS accounts,
+    COUNT(p.opportunity_id) AS total_opportunities,
+    SUM(p.deal_stage IN ('Won', 'Lost')) AS completed_opportunities,
+    SUM(p.deal_stage = 'Won') AS won_opportunities,
+    ROUND(
+        100.0 * SUM(p.deal_stage = 'Won')
+        / NULLIF(SUM(p.deal_stage IN ('Won', 'Lost')), 0),
+        1
+    ) AS win_rate_pct,
+    ROUND(
+        SUM(CASE WHEN p.deal_stage = 'Won' THEN p.close_value ELSE 0 END),
+        2
+    ) AS won_revenue,
+    ROUND(
+        AVG(CASE WHEN p.deal_stage = 'Won' THEN p.close_value END),
+        2
+    ) AS average_won_deal_value,
+    ROUND(
+        AVG(CASE
+            WHEN p.deal_stage IN ('Won', 'Lost') THEN p.sales_cycle_days
+        END),
+        1
+    ) AS average_completed_sales_cycle_days
+FROM dim_accounts AS a
+LEFT JOIN fact_sales_pipeline AS p
+    ON a.account = p.account
+GROUP BY a.sector
+ORDER BY won_revenue DESC;
+
+-- -------------------------------------------------------------
+-- 21. CUSTOMER LOCATION PERFORMANCE
+-- -------------------------------------------------------------
+-- Question: Where are MavenTech's strongest customer markets?
+--
+-- Results should be read alongside account counts because most
+-- accounts are located in the United States and several countries
+-- are represented by only one account.
+
+SELECT
+    a.office_location,
+    COUNT(DISTINCT a.account) AS accounts,
+    COUNT(p.opportunity_id) AS total_opportunities,
+    SUM(p.deal_stage = 'Won') AS won_opportunities,
+    ROUND(
+        100.0 * SUM(p.deal_stage = 'Won')
+        / NULLIF(SUM(p.deal_stage IN ('Won', 'Lost')), 0),
+        1
+    ) AS win_rate_pct,
+    ROUND(
+        SUM(CASE WHEN p.deal_stage = 'Won' THEN p.close_value ELSE 0 END),
+        2
+    ) AS won_revenue,
+    ROUND(
+        AVG(CASE WHEN p.deal_stage = 'Won' THEN p.close_value END),
+        2
+    ) AS average_won_deal_value
+FROM dim_accounts AS a
+LEFT JOIN fact_sales_pipeline AS p
+    ON a.account = p.account
+GROUP BY a.office_location
+ORDER BY won_revenue DESC;
+
+-- -------------------------------------------------------------
+-- 22. COMPANY-SIZE PERFORMANCE
+-- -------------------------------------------------------------
+-- Question: Do small, medium and large customer organizations show
+-- different revenue or conversion patterns?
+--
+-- The employee bands are analytical groupings created for this
+-- project rather than categories supplied in the source data.
+
+WITH accounts_with_size AS (
+    SELECT
+        account,
+        CASE
+            WHEN employees < 100 THEN 'Small: fewer than 100'
+            WHEN employees < 1000 THEN 'Medium: 100-999'
+            WHEN employees < 10000 THEN 'Large: 1,000-9,999'
+            ELSE 'Enterprise: 10,000+'
+        END AS company_size,
+        CASE
+            WHEN employees < 100 THEN 1
+            WHEN employees < 1000 THEN 2
+            WHEN employees < 10000 THEN 3
+            ELSE 4
+        END AS size_order
+    FROM dim_accounts
+)
+SELECT
+    a.company_size,
+    COUNT(DISTINCT a.account) AS accounts,
+    COUNT(p.opportunity_id) AS total_opportunities,
+    SUM(p.deal_stage = 'Won') AS won_opportunities,
+    ROUND(
+        100.0 * SUM(p.deal_stage = 'Won')
+        / NULLIF(SUM(p.deal_stage IN ('Won', 'Lost')), 0),
+        1
+    ) AS win_rate_pct,
+    ROUND(
+        SUM(CASE WHEN p.deal_stage = 'Won' THEN p.close_value ELSE 0 END),
+        2
+    ) AS won_revenue,
+    ROUND(
+        AVG(CASE WHEN p.deal_stage = 'Won' THEN p.close_value END),
+        2
+    ) AS average_won_deal_value,
+    ROUND(
+        AVG(CASE
+            WHEN p.deal_stage IN ('Won', 'Lost') THEN p.sales_cycle_days
+        END),
+        1
+    ) AS average_completed_sales_cycle_days
+FROM accounts_with_size AS a
+LEFT JOIN fact_sales_pipeline AS p
+    ON a.account = p.account
+GROUP BY a.company_size, a.size_order
+ORDER BY a.size_order;
+
+-- -------------------------------------------------------------
+-- 23. ACCOUNT CONCENTRATION
+-- -------------------------------------------------------------
+-- Question: How dependent is total revenue on MavenTech's largest
+-- customer accounts?
+
+WITH account_revenue AS (
+    SELECT
+        a.account,
+        a.sector,
+        SUM(CASE WHEN p.deal_stage = 'Won' THEN p.close_value ELSE 0 END)
+            AS won_revenue
+    FROM dim_accounts AS a
+    LEFT JOIN fact_sales_pipeline AS p
+        ON a.account = p.account
+    GROUP BY a.account, a.sector
+),
+ranked_accounts AS (
+    SELECT
+        account,
+        sector,
+        won_revenue,
+        ROW_NUMBER() OVER (ORDER BY won_revenue DESC) AS revenue_rank,
+        SUM(won_revenue) OVER () AS company_revenue
+    FROM account_revenue
+)
+SELECT
+    account,
+    sector,
+    revenue_rank,
+    ROUND(won_revenue, 2) AS won_revenue,
+    ROUND(100.0 * won_revenue / NULLIF(company_revenue, 0), 1)
+        AS share_of_company_revenue_pct,
+    ROUND(
+        100.0 * SUM(won_revenue) OVER (ORDER BY revenue_rank)
+        / NULLIF(company_revenue, 0),
+        1
+    ) AS cumulative_revenue_share_pct
+FROM ranked_accounts
+ORDER BY revenue_rank;
+
+-- =============================================================
+-- END OF PART 3
+-- Next: open-pipeline ageing, stalled opportunities and management
+-- attention areas.
 -- =============================================================
