@@ -231,6 +231,302 @@ GROUP BY DATE_FORMAT(close_date, '%Y-%m-01')
 ORDER BY month_start;
 
 -- =============================================================
--- END OF PART 1
--- Next: team, regional-office and individual-agent performance.
+-- PART 2: SALES TEAM AND REGIONAL PERFORMANCE
+-- =============================================================
+
+-- -------------------------------------------------------------
+-- 9. REGIONAL-OFFICE PERFORMANCE
+-- -------------------------------------------------------------
+-- Question: Which regional offices generate the most revenue, and
+-- are the differences driven by volume, win rate or deal size?
+
+SELECT
+    a.regional_office,
+    COUNT(p.opportunity_id) AS total_opportunities,
+    SUM(p.deal_stage IN ('Won', 'Lost')) AS completed_opportunities,
+    SUM(p.deal_stage = 'Won') AS won_opportunities,
+    SUM(p.deal_stage = 'Lost') AS lost_opportunities,
+    SUM(p.deal_stage IN ('Prospecting', 'Engaging')) AS open_opportunities,
+    ROUND(
+        100.0 * SUM(p.deal_stage = 'Won')
+        / NULLIF(SUM(p.deal_stage IN ('Won', 'Lost')), 0),
+        1
+    ) AS win_rate_pct,
+    ROUND(
+        SUM(CASE WHEN p.deal_stage = 'Won' THEN p.close_value ELSE 0 END),
+        2
+    ) AS won_revenue,
+    ROUND(
+        AVG(CASE WHEN p.deal_stage = 'Won' THEN p.close_value END),
+        2
+    ) AS average_won_deal_value,
+    ROUND(
+        AVG(CASE
+            WHEN p.deal_stage IN ('Won', 'Lost') THEN p.sales_cycle_days
+        END),
+        1
+    ) AS average_completed_sales_cycle_days
+FROM fact_sales_pipeline AS p
+INNER JOIN dim_sales_agents AS a
+    ON p.sales_agent = a.sales_agent
+GROUP BY a.regional_office
+ORDER BY won_revenue DESC;
+
+-- -------------------------------------------------------------
+-- 10. MANAGER PERFORMANCE
+-- -------------------------------------------------------------
+-- Question: How do the sales teams compare under each manager?
+--
+-- Agent count comes from the full roster, including agents with no
+-- recorded opportunities, so team size is not understated.
+
+WITH manager_roster AS (
+    SELECT
+        manager,
+        regional_office,
+        COUNT(*) AS rostered_agents
+    FROM dim_sales_agents
+    GROUP BY manager, regional_office
+),
+manager_results AS (
+    SELECT
+        a.manager,
+        a.regional_office,
+        COUNT(p.opportunity_id) AS total_opportunities,
+        SUM(p.deal_stage IN ('Won', 'Lost')) AS completed_opportunities,
+        SUM(p.deal_stage = 'Won') AS won_opportunities,
+        SUM(p.deal_stage = 'Lost') AS lost_opportunities,
+        SUM(p.deal_stage IN ('Prospecting', 'Engaging')) AS open_opportunities,
+        SUM(CASE WHEN p.deal_stage = 'Won' THEN p.close_value ELSE 0 END)
+            AS won_revenue,
+        AVG(CASE WHEN p.deal_stage = 'Won' THEN p.close_value END)
+            AS average_won_deal_value,
+        AVG(CASE
+            WHEN p.deal_stage IN ('Won', 'Lost') THEN p.sales_cycle_days
+        END) AS average_completed_sales_cycle_days
+    FROM dim_sales_agents AS a
+    LEFT JOIN fact_sales_pipeline AS p
+        ON a.sales_agent = p.sales_agent
+    GROUP BY a.manager, a.regional_office
+)
+SELECT
+    r.manager,
+    r.regional_office,
+    r.rostered_agents,
+    m.total_opportunities,
+    m.completed_opportunities,
+    m.won_opportunities,
+    m.lost_opportunities,
+    m.open_opportunities,
+    ROUND(
+        100.0 * m.won_opportunities
+        / NULLIF(m.completed_opportunities, 0),
+        1
+    ) AS win_rate_pct,
+    ROUND(m.won_revenue, 2) AS won_revenue,
+    ROUND(m.won_revenue / NULLIF(r.rostered_agents, 0), 2)
+        AS revenue_per_rostered_agent,
+    ROUND(m.average_won_deal_value, 2) AS average_won_deal_value,
+    ROUND(m.average_completed_sales_cycle_days, 1)
+        AS average_completed_sales_cycle_days
+FROM manager_roster AS r
+INNER JOIN manager_results AS m
+    ON r.manager = m.manager
+   AND r.regional_office = m.regional_office
+ORDER BY won_revenue DESC;
+
+-- -------------------------------------------------------------
+-- 11. INDIVIDUAL AGENT SCORECARD
+-- -------------------------------------------------------------
+-- Question: How is each agent performing across activity, outcomes
+-- and revenue?
+--
+-- Starting from the agent dimension keeps the five rostered agents
+-- with no opportunities visible instead of silently dropping them.
+
+SELECT
+    a.sales_agent,
+    a.manager,
+    a.regional_office,
+    COUNT(p.opportunity_id) AS total_opportunities,
+    SUM(COALESCE(p.deal_stage IN ('Won', 'Lost'), 0))
+        AS completed_opportunities,
+    SUM(COALESCE(p.deal_stage = 'Won', 0)) AS won_opportunities,
+    SUM(COALESCE(p.deal_stage = 'Lost', 0)) AS lost_opportunities,
+    SUM(COALESCE(p.deal_stage IN ('Prospecting', 'Engaging'), 0))
+        AS open_opportunities,
+    ROUND(
+        100.0 * SUM(COALESCE(p.deal_stage = 'Won', 0))
+        / NULLIF(SUM(COALESCE(p.deal_stage IN ('Won', 'Lost'), 0)), 0),
+        1
+    ) AS win_rate_pct,
+    ROUND(
+        SUM(CASE WHEN p.deal_stage = 'Won' THEN p.close_value ELSE 0 END),
+        2
+    ) AS won_revenue,
+    ROUND(
+        AVG(CASE WHEN p.deal_stage = 'Won' THEN p.close_value END),
+        2
+    ) AS average_won_deal_value,
+    ROUND(
+        AVG(CASE
+            WHEN p.deal_stage IN ('Won', 'Lost') THEN p.sales_cycle_days
+        END),
+        1
+    ) AS average_completed_sales_cycle_days,
+    CASE
+        WHEN COUNT(p.opportunity_id) = 0 THEN 'No recorded activity'
+        ELSE 'Active'
+    END AS activity_status
+FROM dim_sales_agents AS a
+LEFT JOIN fact_sales_pipeline AS p
+    ON a.sales_agent = p.sales_agent
+GROUP BY
+    a.sales_agent,
+    a.manager,
+    a.regional_office
+ORDER BY won_revenue DESC, a.sales_agent;
+
+-- -------------------------------------------------------------
+-- 12. AGENT PERFORMANCE RANKING
+-- -------------------------------------------------------------
+-- Question: Who leads on revenue, win rate and deal size?
+--
+-- Win-rate rank is shown only for agents with at least 30 completed
+-- opportunities. This avoids presenting a tiny sample as if it
+-- were directly comparable with a full workload.
+
+WITH agent_performance AS (
+    SELECT
+        a.sales_agent,
+        a.manager,
+        a.regional_office,
+        COUNT(p.opportunity_id) AS total_opportunities,
+        SUM(COALESCE(p.deal_stage IN ('Won', 'Lost'), 0))
+            AS completed_opportunities,
+        SUM(COALESCE(p.deal_stage = 'Won', 0)) AS won_opportunities,
+        SUM(CASE WHEN p.deal_stage = 'Won' THEN p.close_value ELSE 0 END)
+            AS won_revenue,
+        AVG(CASE WHEN p.deal_stage = 'Won' THEN p.close_value END)
+            AS average_won_deal_value
+    FROM dim_sales_agents AS a
+    LEFT JOIN fact_sales_pipeline AS p
+        ON a.sales_agent = p.sales_agent
+    GROUP BY
+        a.sales_agent,
+        a.manager,
+        a.regional_office
+),
+agent_metrics AS (
+    SELECT
+        *,
+        100.0 * won_opportunities / NULLIF(completed_opportunities, 0)
+            AS win_rate_pct
+    FROM agent_performance
+)
+SELECT
+    sales_agent,
+    manager,
+    regional_office,
+    total_opportunities,
+    completed_opportunities,
+    won_opportunities,
+    ROUND(win_rate_pct, 1) AS win_rate_pct,
+    ROUND(won_revenue, 2) AS won_revenue,
+    ROUND(average_won_deal_value, 2) AS average_won_deal_value,
+    DENSE_RANK() OVER (ORDER BY won_revenue DESC) AS revenue_rank,
+    CASE
+        WHEN completed_opportunities >= 30
+            THEN DENSE_RANK() OVER (
+                ORDER BY
+                    CASE
+                        WHEN completed_opportunities >= 30 THEN win_rate_pct
+                    END DESC
+            )
+        ELSE NULL
+    END AS qualified_win_rate_rank
+FROM agent_metrics
+ORDER BY revenue_rank, sales_agent;
+
+-- -------------------------------------------------------------
+-- 13. WHAT DRIVES EACH AGENT'S REVENUE?
+-- -------------------------------------------------------------
+-- Question: Is an agent's revenue mainly explained by handling more
+-- opportunities, winning more often or closing larger deals?
+--
+-- Won revenue can be understood as:
+-- completed volume x win rate x average won deal value.
+
+WITH agent_drivers AS (
+    SELECT
+        a.sales_agent,
+        a.manager,
+        a.regional_office,
+        COUNT(p.opportunity_id) AS total_opportunities,
+        SUM(COALESCE(p.deal_stage IN ('Won', 'Lost'), 0))
+            AS completed_opportunities,
+        SUM(COALESCE(p.deal_stage = 'Won', 0)) AS won_opportunities,
+        SUM(CASE WHEN p.deal_stage = 'Won' THEN p.close_value ELSE 0 END)
+            AS won_revenue,
+        AVG(CASE WHEN p.deal_stage = 'Won' THEN p.close_value END)
+            AS average_won_deal_value
+    FROM dim_sales_agents AS a
+    LEFT JOIN fact_sales_pipeline AS p
+        ON a.sales_agent = p.sales_agent
+    GROUP BY
+        a.sales_agent,
+        a.manager,
+        a.regional_office
+)
+SELECT
+    sales_agent,
+    manager,
+    regional_office,
+    total_opportunities,
+    completed_opportunities,
+    ROUND(
+        100.0 * won_opportunities
+        / NULLIF(completed_opportunities, 0),
+        1
+    ) AS win_rate_pct,
+    ROUND(average_won_deal_value, 2) AS average_won_deal_value,
+    ROUND(won_revenue, 2) AS won_revenue,
+    ROUND(
+        100.0 * won_revenue / NULLIF(SUM(won_revenue) OVER (), 0),
+        1
+    ) AS share_of_company_revenue_pct
+FROM agent_drivers
+ORDER BY won_revenue DESC, sales_agent;
+
+-- -------------------------------------------------------------
+-- 14. REGIONAL MONTHLY TREND
+-- -------------------------------------------------------------
+-- Question: Did the offices perform consistently through the year,
+-- or did their results rise and fall at different times?
+
+SELECT
+    DATE_FORMAT(p.close_date, '%Y-%m-01') AS month_start,
+    a.regional_office,
+    COUNT(*) AS closed_opportunities,
+    SUM(p.deal_stage = 'Won') AS won_opportunities,
+    ROUND(
+        100.0 * SUM(p.deal_stage = 'Won') / NULLIF(COUNT(*), 0),
+        1
+    ) AS win_rate_pct,
+    ROUND(
+        SUM(CASE WHEN p.deal_stage = 'Won' THEN p.close_value ELSE 0 END),
+        2
+    ) AS won_revenue
+FROM fact_sales_pipeline AS p
+INNER JOIN dim_sales_agents AS a
+    ON p.sales_agent = a.sales_agent
+WHERE p.deal_stage IN ('Won', 'Lost')
+GROUP BY
+    DATE_FORMAT(p.close_date, '%Y-%m-01'),
+    a.regional_office
+ORDER BY month_start, a.regional_office;
+
+-- =============================================================
+-- END OF PART 2
+-- Next: product, pricing, account and customer-segment performance.
 -- =============================================================
