@@ -869,7 +869,306 @@ FROM ranked_accounts
 ORDER BY revenue_rank;
 
 -- =============================================================
--- END OF PART 3
--- Next: open-pipeline ageing, stalled opportunities and management
--- attention areas.
+-- PART 4: OPEN PIPELINE HEALTH AND MANAGEMENT ATTENTION
+-- =============================================================
+
+-- -------------------------------------------------------------
+-- 24. CONFIRM THE PIPELINE SNAPSHOT DATE
+-- -------------------------------------------------------------
+-- The source does not provide an explicit extract date. December
+-- 31, 2017 is used as the reporting snapshot because it is the
+-- latest recorded close date in the dataset.
+--
+-- Using CURRENT_DATE would be misleading: it would add years that
+-- occurred after the dataset ended to every open opportunity.
+
+SELECT
+    MAX(close_date) AS reporting_snapshot_date,
+    MIN(engage_date) AS first_recorded_engagement,
+    MAX(engage_date) AS latest_recorded_engagement
+FROM fact_sales_pipeline;
+
+-- -------------------------------------------------------------
+-- 25. OPEN PIPELINE OVERVIEW
+-- -------------------------------------------------------------
+-- Question: How much open work sits at each stage, and how much of
+-- it has not yet been linked to a named customer account?
+
+SELECT
+    deal_stage,
+    COUNT(*) AS open_opportunities,
+    SUM(account IS NULL) AS opportunities_without_account,
+    ROUND(
+        100.0 * SUM(account IS NULL) / NULLIF(COUNT(*), 0),
+        1
+    ) AS missing_account_pct,
+    COUNT(DISTINCT sales_agent) AS agents_with_open_opportunities,
+    COUNT(DISTINCT product) AS products_in_open_pipeline
+FROM fact_sales_pipeline
+WHERE deal_stage IN ('Prospecting', 'Engaging')
+GROUP BY deal_stage
+ORDER BY FIELD(deal_stage, 'Prospecting', 'Engaging');
+
+-- -------------------------------------------------------------
+-- 26. AGEING OF ENGAGING OPPORTUNITIES
+-- -------------------------------------------------------------
+-- Question: How long have currently engaging opportunities remained
+-- open since customer engagement began?
+--
+-- Prospecting opportunities are excluded because they have no
+-- creation or engagement date and therefore cannot be aged fairly.
+
+WITH engaging_age AS (
+    SELECT
+        opportunity_id,
+        DATEDIFF('2017-12-31', engage_date) AS pipeline_age_days
+    FROM fact_sales_pipeline
+    WHERE deal_stage = 'Engaging'
+)
+SELECT
+    CASE
+        WHEN pipeline_age_days <= 30 THEN '0-30 days'
+        WHEN pipeline_age_days <= 60 THEN '31-60 days'
+        WHEN pipeline_age_days <= 90 THEN '61-90 days'
+        WHEN pipeline_age_days <= 138 THEN '91-138 days'
+        ELSE '139+ days'
+    END AS age_band,
+    COUNT(*) AS engaging_opportunities,
+    ROUND(
+        100.0 * COUNT(*) / SUM(COUNT(*)) OVER (),
+        1
+    ) AS share_of_engaging_pipeline_pct,
+    CASE
+        WHEN MAX(pipeline_age_days) > 138
+             AND MIN(pipeline_age_days) > 138
+            THEN 'Beyond longest completed cycle'
+        ELSE 'Within completed-cycle range'
+    END AS interpretation
+FROM engaging_age
+GROUP BY
+    CASE
+        WHEN pipeline_age_days <= 30 THEN '0-30 days'
+        WHEN pipeline_age_days <= 60 THEN '31-60 days'
+        WHEN pipeline_age_days <= 90 THEN '61-90 days'
+        WHEN pipeline_age_days <= 138 THEN '91-138 days'
+        ELSE '139+ days'
+    END
+ORDER BY MIN(pipeline_age_days);
+
+-- The 138-day boundary is evidence-based: 138 days is the longest
+-- sales cycle observed among completed opportunities in this data.
+
+-- -------------------------------------------------------------
+-- 27. POTENTIALLY STALLED OPPORTUNITIES
+-- -------------------------------------------------------------
+-- Question: Which engaging opportunities have remained open longer
+-- than any opportunity in the completed-deal history?
+--
+-- These records deserve review, but the label "potentially stalled"
+-- is not the same as declaring that the opportunity is invalid.
+
+SELECT
+    p.opportunity_id,
+    p.sales_agent,
+    a.manager,
+    a.regional_office,
+    p.product,
+    p.account,
+    p.engage_date,
+    DATEDIFF('2017-12-31', p.engage_date) AS pipeline_age_days
+FROM fact_sales_pipeline AS p
+INNER JOIN dim_sales_agents AS a
+    ON p.sales_agent = a.sales_agent
+WHERE p.deal_stage = 'Engaging'
+  AND DATEDIFF('2017-12-31', p.engage_date) > 138
+ORDER BY pipeline_age_days DESC, p.opportunity_id;
+
+-- -------------------------------------------------------------
+-- 28. STALLED-PIPELINE CONCENTRATION BY TEAM
+-- -------------------------------------------------------------
+-- Question: Which managers and offices carry the largest number and
+-- share of potentially stalled opportunities?
+
+SELECT
+    a.manager,
+    a.regional_office,
+    SUM(p.deal_stage = 'Engaging') AS engaging_opportunities,
+    SUM(
+        p.deal_stage = 'Engaging'
+        AND DATEDIFF('2017-12-31', p.engage_date) > 138
+    ) AS potentially_stalled_opportunities,
+    ROUND(
+        100.0 * SUM(
+            p.deal_stage = 'Engaging'
+            AND DATEDIFF('2017-12-31', p.engage_date) > 138
+        ) / NULLIF(SUM(p.deal_stage = 'Engaging'), 0),
+        1
+    ) AS potentially_stalled_share_pct,
+    ROUND(
+        AVG(CASE
+            WHEN p.deal_stage = 'Engaging'
+                THEN DATEDIFF('2017-12-31', p.engage_date)
+        END),
+        1
+    ) AS average_engaging_age_days
+FROM dim_sales_agents AS a
+LEFT JOIN fact_sales_pipeline AS p
+    ON a.sales_agent = p.sales_agent
+GROUP BY a.manager, a.regional_office
+ORDER BY potentially_stalled_opportunities DESC, a.manager;
+
+-- -------------------------------------------------------------
+-- 29. STALLED-PIPELINE CONCENTRATION BY AGENT
+-- -------------------------------------------------------------
+-- Question: Which agents may need the most immediate pipeline review
+-- or coaching support?
+
+SELECT
+    a.sales_agent,
+    a.manager,
+    a.regional_office,
+    SUM(p.deal_stage = 'Engaging') AS engaging_opportunities,
+    SUM(
+        p.deal_stage = 'Engaging'
+        AND DATEDIFF('2017-12-31', p.engage_date) > 138
+    ) AS potentially_stalled_opportunities,
+    ROUND(
+        100.0 * SUM(
+            p.deal_stage = 'Engaging'
+            AND DATEDIFF('2017-12-31', p.engage_date) > 138
+        ) / NULLIF(SUM(p.deal_stage = 'Engaging'), 0),
+        1
+    ) AS potentially_stalled_share_pct,
+    ROUND(
+        AVG(CASE
+            WHEN p.deal_stage = 'Engaging'
+                THEN DATEDIFF('2017-12-31', p.engage_date)
+        END),
+        1
+    ) AS average_engaging_age_days
+FROM dim_sales_agents AS a
+LEFT JOIN fact_sales_pipeline AS p
+    ON a.sales_agent = p.sales_agent
+GROUP BY
+    a.sales_agent,
+    a.manager,
+    a.regional_office
+HAVING engaging_opportunities > 0
+ORDER BY
+    potentially_stalled_opportunities DESC,
+    potentially_stalled_share_pct DESC,
+    a.sales_agent;
+
+-- -------------------------------------------------------------
+-- 30. OPEN PIPELINE BY PRODUCT
+-- -------------------------------------------------------------
+-- Question: Which products account for the greatest share of future
+-- sales activity and the oldest engaging opportunities?
+
+SELECT
+    pr.product,
+    pr.series,
+    SUM(p.deal_stage = 'Prospecting') AS prospecting_opportunities,
+    SUM(p.deal_stage = 'Engaging') AS engaging_opportunities,
+    SUM(p.deal_stage IN ('Prospecting', 'Engaging'))
+        AS total_open_opportunities,
+    ROUND(
+        AVG(CASE
+            WHEN p.deal_stage = 'Engaging'
+                THEN DATEDIFF('2017-12-31', p.engage_date)
+        END),
+        1
+    ) AS average_engaging_age_days,
+    SUM(
+        p.deal_stage = 'Engaging'
+        AND DATEDIFF('2017-12-31', p.engage_date) > 138
+    ) AS potentially_stalled_opportunities
+FROM dim_products AS pr
+LEFT JOIN fact_sales_pipeline AS p
+    ON pr.product = p.product
+GROUP BY pr.product, pr.series
+ORDER BY total_open_opportunities DESC, pr.product;
+
+-- -------------------------------------------------------------
+-- 31. OPEN PIPELINE BY REGIONAL OFFICE
+-- -------------------------------------------------------------
+-- Question: How is current pipeline workload distributed across the
+-- three regional offices?
+
+SELECT
+    a.regional_office,
+    SUM(p.deal_stage = 'Prospecting') AS prospecting_opportunities,
+    SUM(p.deal_stage = 'Engaging') AS engaging_opportunities,
+    SUM(p.deal_stage IN ('Prospecting', 'Engaging'))
+        AS total_open_opportunities,
+    ROUND(
+        100.0 * SUM(p.deal_stage IN ('Prospecting', 'Engaging'))
+        / NULLIF(
+            SUM(SUM(p.deal_stage IN ('Prospecting', 'Engaging'))) OVER (),
+            0
+        ),
+        1
+    ) AS share_of_open_pipeline_pct,
+    SUM(
+        p.deal_stage IN ('Prospecting', 'Engaging')
+        AND p.account IS NULL
+    ) AS open_opportunities_without_account,
+    ROUND(
+        AVG(CASE
+            WHEN p.deal_stage = 'Engaging'
+                THEN DATEDIFF('2017-12-31', p.engage_date)
+        END),
+        1
+    ) AS average_engaging_age_days
+FROM dim_sales_agents AS a
+LEFT JOIN fact_sales_pipeline AS p
+    ON a.sales_agent = p.sales_agent
+GROUP BY a.regional_office
+ORDER BY total_open_opportunities DESC;
+
+-- -------------------------------------------------------------
+-- 32. MANAGEMENT ATTENTION SUMMARY
+-- -------------------------------------------------------------
+-- Question: Which managers combine weaker closed-deal performance
+-- with a large or ageing open pipeline?
+--
+-- This is a diagnostic view rather than a performance verdict. It
+-- brings outcome and pipeline-health measures together so leaders
+-- can decide where a closer review may be useful.
+
+SELECT
+    a.manager,
+    a.regional_office,
+    SUM(p.deal_stage IN ('Won', 'Lost')) AS completed_opportunities,
+    ROUND(
+        100.0 * SUM(p.deal_stage = 'Won')
+        / NULLIF(SUM(p.deal_stage IN ('Won', 'Lost')), 0),
+        1
+    ) AS win_rate_pct,
+    ROUND(
+        SUM(CASE WHEN p.deal_stage = 'Won' THEN p.close_value ELSE 0 END),
+        2
+    ) AS won_revenue,
+    SUM(p.deal_stage IN ('Prospecting', 'Engaging'))
+        AS open_opportunities,
+    SUM(
+        p.deal_stage = 'Engaging'
+        AND DATEDIFF('2017-12-31', p.engage_date) > 138
+    ) AS potentially_stalled_opportunities,
+    SUM(
+        p.deal_stage IN ('Prospecting', 'Engaging')
+        AND p.account IS NULL
+    ) AS open_opportunities_without_account
+FROM dim_sales_agents AS a
+LEFT JOIN fact_sales_pipeline AS p
+    ON a.sales_agent = p.sales_agent
+GROUP BY a.manager, a.regional_office
+ORDER BY
+    potentially_stalled_opportunities DESC,
+    win_rate_pct ASC;
+
+-- =============================================================
+-- END OF BUSINESS ANALYSIS
+-- Findings from these queries will be summarized in the executive
+-- insights report and used to design the Power BI dashboard.
 -- =============================================================
